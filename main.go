@@ -38,12 +38,14 @@ var dynamoClient *dynamodb.Client
 var tableName string
 var bucketName string
 var EDINETBucketName string
-var failedJSONFile = "failed.json"
+// Lambda 用に /tmp を足す
+var failedJSONFile = filepath.Join("/tmp", "failed.json")
 var failedReports []FailedReport
 var mu sync.Mutex
 var errMsg string
 var emptyStrConvErr = `strconv.Atoi: parsing "": invalid syntax`
-var invalidSummaryJSONFile = "invalid-summary.json"
+// Lambda 用に /tmp を足す
+var invalidSummaryJSONFile = filepath.Join("/tmp", "invalid-summary.json")
 var invalidSummaries []InvalidSummary
 var apiTimes int
 var registerSingleReport string
@@ -101,6 +103,44 @@ func handler(ctx context.Context) {
 	fmt.Println("len(reports): ", len(reports))
 	if err != nil {
 		fmt.Println(err)
+		return
+	}
+
+	// invalid-summary.json と failed.json を /tmp ディレクトリに書き込む
+	// invalid-summary.json
+	invalidSummaryKey := "invalid-summary.json"
+	invalidOutput, err := GetS3Object(s3Client, bucketName, invalidSummaryKey)
+	if err != nil {
+		fmt.Println("invalid-summary.json を S3 から取得した際のエラー: ", err)
+		return
+	}
+	invalidBody, err := io.ReadAll(invalidOutput.Body)
+	if err != nil {
+		fmt.Println("invalid-summary.json を S3 から取得した際の io.ReadAll エラー: ", err)
+		return
+	}
+	defer invalidOutput.Body.Close()
+	err = os.WriteFile(fmt.Sprintf("/tmp/%s", invalidSummaryKey), invalidBody, 0777)
+	if err != nil {
+		fmt.Println("invalid-summary.json を S3 から取得した際の os.WriteFile エラー: ", err)
+		return
+	}
+	// failed.json
+	failedKey := "failed.json"
+	failedOutput, err := GetS3Object(s3Client, bucketName, failedKey)
+	if err != nil {
+		fmt.Println("failed.json を S3 から取得した際のエラー: ", err)
+		return
+	}
+	failedBody, err := io.ReadAll(failedOutput.Body)
+	if err != nil {
+		fmt.Println("failed.json を S3 から取得した際の io.ReadAll エラー: ", err)
+		return
+	}
+	defer failedOutput.Body.Close()
+	err = os.WriteFile(fmt.Sprintf("/tmp/%s", failedKey), failedBody, 0777)
+	if err != nil {
+		fmt.Println("failed.json を S3 から取得した際の os.WriteFile エラー: ", err)
 		return
 	}
 
@@ -254,9 +294,9 @@ func GetReports() ([]Result, error) {
 
 	if env == "local" {
 		// 集計開始日付
-		date = time.Date(2024, time.January, 1, 1, 0, 0, 0, loc)
+		date = time.Date(2024, time.November, 11, 1, 0, 0, 0, loc)
 		// 集計終了日付
-		endDate = time.Date(2024, time.January, 2, 1, 0, 0, 0, loc)
+		endDate = time.Date(2024, time.November, 11, 1, 0, 0, 0, loc)
 	} else if env == "production" {
 		today := time.Now().In(loc)
 		// 集計開始日付
@@ -379,14 +419,16 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 		}
 		defer resp.Body.Close()
 
-		dirPath := "XBRL"
+		// Lambda 用に /tmp を足す
+		dirPath := filepath.Join("/tmp", "XBRL")
+		fmt.Println("XBRL DirPath ⭐️: ", dirPath)
 		zipFileName := fmt.Sprintf("%s.zip", docID)
 		path := filepath.Join(dirPath, zipFileName)
 
 		// ディレクトリが存在しない場合は作成
-		err = os.MkdirAll(dirPath, os.ModePerm)
+		err = os.MkdirAll(dirPath, 0777)
 		if err != nil {
-			errMsg = "Error creating directory: "
+			errMsg = "Error creating XBRL directory: "
 			registerFailedJson(docID, dateKey, errMsg+err.Error())
 			return
 		}
@@ -416,7 +458,8 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 		}
 
 		// XBRLファイルの取得
-		parentPath = filepath.Join("XBRL", docID, XBRLFilepath)
+		// Lambda 用に /tmp を足す
+		parentPath = filepath.Join("/tmp", "XBRL", docID, XBRLFilepath)
 		XBRLFile, err := os.Open(parentPath)
 		if err != nil {
 			errMsg = "XBRL open err: "
@@ -1114,7 +1157,8 @@ func CreateHTML(docID string, dateKey string, fileType, consolidatedBSMatches, s
 	unescapedStr = FormatHtmlTable(unescapedStr)
 
 	// html ファイルとして書き出す
-	HTMLDirName := "HTML"
+	// Lambda 用に /tmp を足す
+	HTMLDirName := filepath.Join("/tmp", "HTML")
 	var fileName string
 	var filePath string
 
@@ -1135,7 +1179,7 @@ func CreateHTML(docID string, dateKey string, fileType, consolidatedBSMatches, s
 		if err != nil {
 			errMsg = "HTML ローカルディレクトリ作成エラー: "
 			registerFailedJson(docID, dateKey, errMsg+err.Error())
-			fmt.Println("Error creating directory:", err)
+			fmt.Println("Error creating HTML directory:", err)
 			return nil, err
 		}
 	}
@@ -1212,7 +1256,8 @@ func CreateCFHTML(docID string, dateKey string, cfFileNamePattern, body string, 
 	unescapedMatch = strings.ReplaceAll(unescapedMatch, "&apos;", "'")
 	unescapedMatch = FormatHtmlTable(unescapedMatch)
 
-	HTMLDirName := "HTML"
+	// Lambda 用に /tmp を足す
+	HTMLDirName := filepath.Join("/tmp", "HTML")
 	cfHTMLFileName := fmt.Sprintf("%s.html", cfFileNamePattern)
 	cfHTMLFilePath := filepath.Join(HTMLDirName, cfHTMLFileName)
 
@@ -1254,12 +1299,16 @@ func CreateCFHTML(docID string, dateKey string, cfFileNamePattern, body string, 
 
 func CreateJSON(docID string, dateKey string, fileNamePattern string, summary interface{}) (string, error) {
 	fileName := fmt.Sprintf("%s.json", fileNamePattern)
-	filePath := fmt.Sprintf("json/%s", fileName)
+	// Lambda 用に /tmp を足す
+	// filePath := fmt.Sprintf("json/%s", fileName)
+	jsonDirName := filepath.Join("/tmp", "json")
+	filePath := filepath.Join(jsonDirName, fileName)
 
 	// ディレクトリが存在しない場合は作成
-	err := os.MkdirAll("json", os.ModePerm)
+	// Lambda 用に /tmp を足す
+	err := os.MkdirAll(jsonDirName, os.ModePerm)
 	if err != nil {
-		errMsg = "Error creating directory: "
+		errMsg = "Error creating JSON directory: "
 		registerFailedJson(docID, dateKey, errMsg+err.Error())
 		return "", err
 	}
@@ -1428,10 +1477,14 @@ func PutFileToS3(docID string, dateKey string, EDINETCode string, companyName st
 	switch extension {
 	case "json":
 		fileName = fmt.Sprintf("%s.json", fileNamePattern)
-		filePath = fmt.Sprintf("json/%s", fileName)
+		// Lambda 用に /tmp を足す
+		// filePath = fmt.Sprintf("json/%s", fileName)
+		filePath = filepath.Join("/tmp", "json", fileName)
 	case "html":
 		fileName = fmt.Sprintf("%s.html", fileNamePattern)
-		filePath = fmt.Sprintf("HTML/%s", fileName)
+		// Lambda 用に /tmp を足す
+		// filePath = fmt.Sprintf("HTML/%s", fileName)
+		filePath = filepath.Join("/tmp", "HTML", fileName)
 	}
 
 	// 処理後、ローカルファイルを削除
@@ -1585,6 +1638,7 @@ func FormatHtmlTable(htmlStr string) string {
 /*
 エラーが出た場合に docID といつ登録されたレポートなのかをjsonファイルに記録する
 */
+// TODO: S3 のファイルを操作する
 func registerFailedJson(docID string, dateKey string, errMsg string) {
 	fmt.Println(errMsg)
 	// 取得から更新までをロック
@@ -1594,6 +1648,7 @@ func registerFailedJson(docID string, dateKey string, errMsg string) {
 
 	// json ファイルの取得
 	openFile, _ := os.Open(failedJSONFile)
+	fmt.Println("JSON Open File ⭐️: ", openFile)
 	defer openFile.Close()
 	if openFile == nil {
 		// ファイルがない場合は作成する
@@ -1613,6 +1668,7 @@ func registerFailedJson(docID string, dateKey string, errMsg string) {
 	}
 	err = json.Unmarshal(body, &failedReports)
 	if err != nil {
+		fmt.Println("registerFailedJson")
 		fmt.Println("failed json unmarshal error: ", err)
 		// registerFailedJson(docID, dateKey, err.Error())
 	}
@@ -1645,6 +1701,7 @@ func registerFailedJson(docID string, dateKey string, errMsg string) {
 	}
 }
 
+// TODO: S3 のファイルを操作する
 func deleteFailedJsonItem(docID string, dateKey string, companyName string) {
 	mu.Lock()
 	// 更新まで終わったらロック解除
@@ -1670,6 +1727,7 @@ func deleteFailedJsonItem(docID string, dateKey string, companyName string) {
 	}
 	err = json.Unmarshal(body, &failedReports)
 	if err != nil {
+		fmt.Println("deleteFailedJsonItem")
 		fmt.Println("failed json unmarshal error: ", err)
 		// registerFailedJson(docID, dateKey, err.Error())
 	}
@@ -1692,18 +1750,23 @@ func deleteFailedJsonItem(docID string, dateKey string, companyName string) {
 			fmt.Println("json MarshalIndent when trying to write failed json error: ", err)
 			// registerFailedJson(docID, dateKey, err.Error())
 		}
-		// json を書き出す
-		err = os.WriteFile(failedJSONFile, jsonBody, 0666)
+		// json を S3 に書き出す
+		err = PutJSONObject(s3Client, bucketName, "failed.json", jsonBody)
 		if err != nil {
-			fmt.Println("failed json write error: ", err)
-			// registerFailedJson(docID, dateKey, err.Error())
+			fmt.Println("failed json put object error: ", err)
 		}
+		// err = os.WriteFile(failedJSONFile, jsonBody, 0666)
+		// if err != nil {
+		// 	fmt.Println("failed json write error: ", err)
+		// 	// registerFailedJson(docID, dateKey, err.Error())
+		// }
 	}
 }
 
 /*
 無効なサマリーだった場合にjsonファイルに記録する
 */
+// TODO: S3 のファイルを操作する
 func registerInvalidSummaryJson(docID string, dateKey string, summaryType string, companyName string) {
 	// 取得から更新までをロック
 	mu.Lock()
@@ -1731,6 +1794,7 @@ func registerInvalidSummaryJson(docID string, dateKey string, summaryType string
 	}
 	err = json.Unmarshal(body, &invalidSummaries)
 	if err != nil {
+		fmt.Println("registerInvalidSummaryJson")
 		fmt.Println("failed json unmarshal error: ", err)
 		// registerFailedJson(docID, dateKey, err.Error())
 	}
@@ -1756,15 +1820,21 @@ func registerInvalidSummaryJson(docID string, dateKey string, summaryType string
 			fmt.Println("json MarshalIndent when trying to write invalid summary error: ", err)
 			// registerFailedJson(docID, dateKey, err.Error())
 		}
-		// json を書き出す
-		err = os.WriteFile(invalidSummaryJSONFile, jsonBody, 0666)
+		// json を S3 に書き出す
+		err = PutJSONObject(s3Client, bucketName, "invalid-summary.json", jsonBody)
 		if err != nil {
-			fmt.Println("invalid summary write error: ", err)
-			// registerFailedJson(docID, dateKey, err.Error())
+			fmt.Println("invalid summary json put object error: ", err)
 		}
+
+		// err = os.WriteFile(invalidSummaryJSONFile, jsonBody, 0666)
+		// if err != nil {
+		// 	fmt.Println("invalid summary write error: ", err)
+		// 	// registerFailedJson(docID, dateKey, err.Error())
+		// }
 	}
 }
 
+// TODO: S3 のファイルを操作する
 func deleteInvalidSummaryJsonItem(docID string, dateKey string, summaryType string, companyName string) {
 	// 取得から更新までをロック
 	mu.Lock()
@@ -1792,6 +1862,7 @@ func deleteInvalidSummaryJsonItem(docID string, dateKey string, summaryType stri
 	}
 	err = json.Unmarshal(body, &invalidSummaries)
 	if err != nil {
+		fmt.Println("deleteInvalidSummaryJsonItem")
 		fmt.Println("failed json unmarshal error: ", err)
 		// registerFailedJson(docID, dateKey, err.Error())
 	}
@@ -1817,12 +1888,17 @@ func deleteInvalidSummaryJsonItem(docID string, dateKey string, summaryType stri
 			fmt.Println("json MarshalIndent when trying to write invalid summary error: ", err)
 			// registerFailedJson(docID, dateKey, err.Error())
 		}
-		// json を書き出す
-		err = os.WriteFile(invalidSummaryJSONFile, jsonBody, 0666)
+		// json S3 にを書き出す
+		err = PutJSONObject(s3Client, bucketName, "invalid-summary.json", jsonBody)
 		if err != nil {
-			fmt.Println("invalid summary write error: ", err)
-			// registerFailedJson(docID, dateKey, err.Error())
+			fmt.Println("invalid summary json put object error: ", err)
 		}
+
+		// err = os.WriteFile(invalidSummaryJSONFile, jsonBody, 0666)
+		// if err != nil {
+		// 	fmt.Println("invalid summary write error: ", err)
+		// 	// registerFailedJson(docID, dateKey, err.Error())
+		// }
 	}
 }
 

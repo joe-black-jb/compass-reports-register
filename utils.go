@@ -101,3 +101,16 @@ func QueryByName(svc *dynamodb.Client, tableName string, companyName string, edi
 
 	return result.Items, nil
 }
+
+func PutJSONObject(s3Client *s3.Client, bucketName string, key string, body []byte) error {
+	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(key),
+		Body:        strings.NewReader(string(body)),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
