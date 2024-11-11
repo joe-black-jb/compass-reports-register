@@ -1,0 +1,9 @@
+/tmp
+.env
+/local
+/XBRL
+/json
+/HTML
+failed.json
+invalid-summary.json
+retryReports.json
