@@ -105,8 +105,8 @@ func init() {
 	RegisterSingleReport = os.Getenv("REGISTER_SINGLE_REPORT")
 	Parallel = os.Getenv("Parallel")
 
-  // /tmp ディレクトリに invalid-summary.json と failed.json を登録する
-  CreateFailedFiles()
+	// /tmp ディレクトリに invalid-summary.json と failed.json を登録する
+	CreateFailedFiles()
 }
 
 func Unzip(source, destination string) (string, error) {
@@ -254,15 +254,15 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 		defer wg.Done()
 	}
 
-  var objectKeys []string
-  // compass-reports-bucket/{EDINETコード} の item をスライスに格納
-  listObjectsOutput := ListS3Objects(S3Client, BucketName, EDINETCode)
-  if len(listObjectsOutput.Contents) > 0 {
-    for _, item := range listObjectsOutput.Contents {
-      key := *item.Key
-      objectKeys = append(objectKeys, key)
-    }
-  }
+	var objectKeys []string
+	// compass-reports-bucket/{EDINETコード} の item をスライスに格納
+	listObjectsOutput := ListS3Objects(S3Client, BucketName, EDINETCode)
+	if len(listObjectsOutput.Contents) > 0 {
+		for _, item := range listObjectsOutput.Contents {
+			key := *item.Key
+			objectKeys = append(objectKeys, key)
+		}
+	}
 
 	BSFileNamePattern := fmt.Sprintf("%s-%s-BS-from-%s-to-%s", EDINETCode, docID, periodStart, periodEnd)
 	PLFileNamePattern := fmt.Sprintf("%s-%s-PL-from-%s-to-%s", EDINETCode, docID, periodStart, periodEnd)
@@ -307,16 +307,34 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 			}
 			key := fmt.Sprintf("%s/%s/%s", dateKey, docID, xbrlFileName)
 			fmt.Println("S3 から XBRL ファイルを取得します⭐️ key: ", key)
-			output, err := GetS3Object(S3Client, EDINETBucketName, key)
-			if err != nil {
-				log.Fatal("S3からのXBRLファイル取得エラー: ", err)
+			output, _ := GetS3Object(S3Client, EDINETBucketName, key)
+			// HTML ファイルを取得し、HTML ファイルもなければ return
+			if output != nil {
+				readBody, err := io.ReadAll(output.Body)
+				if err != nil {
+					log.Fatal("io.ReadAll エラー: ", err)
+				}
+				body = readBody
+				defer output.Body.Close()
+			} else {
+				HTMLFileKey := ConvertExtensionFromXBRLToHTML(key)
+				if HTMLFileKey == "" {
+					fmt.Println("元データの XBRL, HTML ファイルがないため処理を終了します❗️")
+					return
+				}
+				fmt.Println("S3 から HTML ファイルを取得します⭐️ key: ", HTMLFileKey)
+				HTMLOutput, _ := GetS3Object(S3Client, EDINETBucketName, HTMLFileKey)
+				if HTMLOutput == nil {
+					fmt.Println("元データの XBRL, HTML ファイルがないため処理を終了します❗️")
+					return
+				}
+				HTMLReadBody, err := io.ReadAll(HTMLOutput.Body)
+				if err != nil {
+					log.Fatal("io.ReadAll エラー: ", err)
+				}
+				body = HTMLReadBody
+				defer HTMLOutput.Body.Close()
 			}
-			readBody, err := io.ReadAll(output.Body)
-			if err != nil {
-				log.Fatal("io.ReadAll エラー: ", err)
-			}
-			defer output.Body.Close()
-			body = readBody
 		}
 	} else {
 		fmt.Printf("「%s」のレポート (%s) を API から取得します🎾\n", companyName, docID)
@@ -393,8 +411,8 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 
 	// S3 送信処理 (オリジナルHTML送信で事足りそうなのでコメントアウト)
 	// PutXBRLtoS3(docID, dateKey, xbrlKey, body)
-  // オリジナルHTMLを S3 に送信
-  PutOriginalHTMLToS3(docID, dateKey, xbrlKey, string(body))
+	// オリジナルHTMLを S3 に送信
+	PutOriginalHTMLToS3(docID, dateKey, xbrlKey, string(body))
 
 	var xbrl XBRL
 	err = xml.Unmarshal(body, &xbrl)
@@ -478,7 +496,7 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 	// UpdateEverySumary に置き換える
 	// UpdateSummary(doc, docID, dateKey, &summary, fundamental)
 	UpdateEverySummary(doc, docID, dateKey, "bs", &summary, nil, nil, fundamental)
-	fmt.Println("BSSummary ⭐️: ", summary)
+	// fmt.Println("BSSummary ⭐️: ", summary)
 
 	// BS バリデーション用
 	// isSummaryValid := ValidateSummary(summary)
@@ -493,7 +511,7 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 	UpdateEverySummary(plDoc, docID, dateKey, "pl", nil, &plSummary, nil, fundamental)
 
 	isPLSummaryValid := ValidatePLSummary(plSummary)
-	fmt.Println("PLSummary ⭐️: ", plSummary)
+	// fmt.Println("PLSummary ⭐️: ", plSummary)
 
 	// CF計算書データ
 	cfFileNamePattern := fmt.Sprintf("%s-%s-CF-from-%s-to-%s", EDINETCode, docID, periodStart, periodEnd)
@@ -1565,39 +1583,41 @@ func PutFileToS3(docID string, dateKey string, EDINETCode string, companyName st
 		}
 
 		// 登録したいファイル名 から BS-from-2000-01-01-to-2000-12-31 形式の文字列を見つける
-    fromToRe := regexp.MustCompile(FromToPattern)
-    fromToMatch := fromToRe.FindString(key)
-    if fromToMatch != "" {
-      splitBySlash := strings.Split(fromToMatch, "-")
-      if len(splitBySlash) >= 1 {
-        if len(objectKeys) > 0 {
-          for _, objectKey := range objectKeys {
-            if objectKey != key && strings.Contains(objectKey, fromToMatch) {
-              // 同じ期間の古いファイルを S3 から削除
-              _, err := S3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-                Bucket: aws.String(BucketName),
-                Key:    aws.String(objectKey),
-              })
-              if err != nil {
-                fmt.Printf("%s/%s の削除に失敗しました❗️詳細: %v\n", BucketName, objectKey, err)
-              } else {
-                fmt.Printf("%s/%s を削除しました ⭐️\n", BucketName, objectKey)
-              }
-            }
-          }
-        }
-      }
-    }
+		fromToRe := regexp.MustCompile(FromToPattern)
+		fromToMatch := fromToRe.FindString(key)
+		if fromToMatch != "" {
+			splitBySlash := strings.Split(fromToMatch, "-")
+			if len(splitBySlash) >= 1 {
+				if len(objectKeys) > 0 {
+					for _, objectKey := range objectKeys {
+						if objectKey != key && strings.Contains(objectKey, fromToMatch) {
+							// 同じ期間の古いファイルを S3 から削除
+							_, err := S3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								Bucket: aws.String(BucketName),
+								Key:    aws.String(objectKey),
+							})
+							if err != nil {
+								fmt.Printf("%s/%s の削除に失敗しました❗️詳細: %v\n", BucketName, objectKey, err)
+							} else {
+								fmt.Printf("%s/%s を削除しました ⭐️\n", BucketName, objectKey)
+							}
+						}
+					}
+				}
+			}
+		}
 
 		// 同名ファイルの存在チェック
-    existsFile, err := CheckFileExists(S3Client, BucketName, key)
-    if err != nil {
-      fmt.Println("存在チェック時のエラー❗️: ", err)
-    }
-    // fmt.Printf("%s は登録済みですか❓ %v\n", key, existsFile)
+		existsFile, err := CheckFileExists(S3Client, BucketName, key)
+		if err != nil {
+			fmt.Println("存在チェック時のエラー❗️: ", err)
+		}
+		// fmt.Printf("%s は登録済みですか❓ %v\n", key, existsFile)
 
-    // 同名ファイルがなければ登録
-		if !existsFile {
+		if existsFile {
+			fmt.Printf("「%s」のレポート (ID: %s, ファイル名: %s) は S3 に登録済みです\n", companyName, docID, key)
+		} else {
+			// 同名ファイルがなければ登録
 			_, err = S3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 				Bucket:      aws.String(BucketName),
 				Key:         aws.String(key),
@@ -2009,10 +2029,9 @@ func GetTitleValue(docID string, dateKey string, titleName string, previousText 
 	}
 	return TitleValue{
 		Previous: previousIntValue,
-		Current: currentIntValue,
+		Current:  currentIntValue,
 	}, nil
 }
-
 
 func UpdateEverySummary(doc *goquery.Document, docID string, dateKey string, summaryType string, summary *Summary, plSummary *PLSummary, cfSummary *CFSummary, fundamental *Fundamental) {
 	doc.Find("tr").Each(func(i int, s *goquery.Selection) {
@@ -2201,55 +2220,64 @@ func UpdateEverySummary(doc *goquery.Document, docID string, dateKey string, sum
 	})
 }
 
-func CreateFailedFiles(){
-  fmt.Println("失敗用ファイル作成開始⭐️")
-  err := os.WriteFile(InvalidSummaryJSONFile, []byte("[]"), 0777)
-  if err != nil {
-    log.Fatalf("%s の初期作成に失敗しました。\n", InvalidSummaryJSONFile)
-  }
-  err = os.WriteFile(FailedJSONFile, []byte("[]"), 0777)
-  if err != nil {
-    log.Fatalf("%s の初期作成に失敗しました。\n", FailedJSONFile)
-  }
-  fmt.Println("失敗したデータ格納ファイルの作成が完了しました⭐️")
+func CreateFailedFiles() {
+	fmt.Println("失敗用ファイル作成開始⭐️")
+	err := os.WriteFile(InvalidSummaryJSONFile, []byte("[]"), 0777)
+	if err != nil {
+		log.Fatalf("%s の初期作成に失敗しました。\n", InvalidSummaryJSONFile)
+	}
+	err = os.WriteFile(FailedJSONFile, []byte("[]"), 0777)
+	if err != nil {
+		log.Fatalf("%s の初期作成に失敗しました。\n", FailedJSONFile)
+	}
+	fmt.Println("失敗したデータ格納ファイルの作成が完了しました⭐️")
 }
 
-func PutOriginalHTMLToS3(docID string, dateKey string, fileKey string, body string){
-  // ファイルキーから .xbrl の箇所を取得する
-  XBRLExtensionRe := regexp.MustCompile(XBRLExtensionPattern)
-  XBRLExtensionMatch := XBRLExtensionRe.FindString(fileKey)
-  if XBRLExtensionMatch != "" {
-    // .xbrl を .html に変換
-    HTMLFileKey := strings.ReplaceAll(fileKey, ".xbrl", ".html")
-    unescapedStr := html.UnescapeString(body)
-    // 特定のエンティティをさらに手動でデコード
-    unescapedStr = strings.ReplaceAll(unescapedStr, "&apos;", "'")
+func PutOriginalHTMLToS3(docID string, dateKey string, fileKey string, body string) {
+	// ファイルキーから .xbrl の箇所を取得する
+	HTMLFileKey := ConvertExtensionFromXBRLToHTML(fileKey)
+	if HTMLFileKey != "" {
+		unescapedStr := html.UnescapeString(body)
+		// 特定のエンティティをさらに手動でデコード
+		unescapedStr = strings.ReplaceAll(unescapedStr, "&apos;", "'")
 
-    // HTMLデータを加工
-    unescapedStr = FormatHtmlTable(unescapedStr)
+		// HTMLデータを加工
+		unescapedStr = FormatHtmlTable(unescapedStr)
 
-    // 同名ファイルの存在チェック
-    existsFile, err := CheckFileExists(S3Client, EDINETBucketName, HTMLFileKey)
-    if err != nil {
-      fmt.Println("存在チェック時のエラー❗️: ", err)
-    }
-    // fmt.Printf("%s は登録済みですか❓ %v\n", key, existsFile)
+		// 同名ファイルの存在チェック
+		existsFile, err := CheckFileExists(S3Client, EDINETBucketName, HTMLFileKey)
+		if err != nil {
+			fmt.Println("存在チェック時のエラー❗️: ", err)
+		}
+		// fmt.Printf("%s は登録済みですか❓ %v\n", key, existsFile)
 
-    // 同名ファイルがなければ登録
-    if !existsFile {
-      _, err = S3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-        Bucket:      aws.String(EDINETBucketName),
-        Key:         aws.String(HTMLFileKey),
-        Body:        strings.NewReader(string(unescapedStr)),
-        ContentType: aws.String("text/html"),
-      })
-      if err != nil {
-        ErrMsg = "S3 Original HTML PutObject error: "
-        RegisterFailedJson(docID, dateKey, ErrMsg+err.Error())
-        return
-      }
-      uploadDoneMsg := fmt.Sprintf("オリジナルHTML (%s) を登録しました ⭕️ ", HTMLFileKey)
-      fmt.Println(uploadDoneMsg)
-    }
-  }
+		// 同名ファイルがなければ登録
+		if !existsFile {
+			_, err = S3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+				Bucket:      aws.String(EDINETBucketName),
+				Key:         aws.String(HTMLFileKey),
+				Body:        strings.NewReader(string(unescapedStr)),
+				ContentType: aws.String("text/html"),
+			})
+			if err != nil {
+				ErrMsg = "S3 Original HTML PutObject error: "
+				RegisterFailedJson(docID, dateKey, ErrMsg+err.Error())
+				return
+			}
+			uploadDoneMsg := fmt.Sprintf("オリジナルHTML (%s) を登録しました ⭕️ ", HTMLFileKey)
+			fmt.Println(uploadDoneMsg)
+		}
+	}
+}
+
+func ConvertExtensionFromXBRLToHTML(fileKey string) string {
+	XBRLExtensionRe := regexp.MustCompile(XBRLExtensionPattern)
+	XBRLExtensionMatch := XBRLExtensionRe.FindString(fileKey)
+	if XBRLExtensionMatch != "" {
+		// .xbrl を .html に変換
+		HTMLFileKey := strings.ReplaceAll(fileKey, ".xbrl", ".html")
+		return HTMLFileKey
+	}
+	// 変換できなければファイルキーをそのまま返す
+	return ""
 }

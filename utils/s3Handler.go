@@ -50,7 +50,7 @@ func CheckExistsS3Key(s3Client *s3.Client, bucketName string, key string) (bool,
 	return len(output.Contents) > 0, nil
 }
 
-func CheckFileExists(s3Client *s3.Client, bucketName string, key string)(bool, error){
+func CheckFileExists(s3Client *s3.Client, bucketName string, key string) (bool, error) {
 	_, err := s3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
 		Bucket: aws.String(BucketName),
 		Key:    aws.String(key),
