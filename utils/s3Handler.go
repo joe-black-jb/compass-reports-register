@@ -2,6 +2,8 @@ package utils
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go/aws"
 )
 
@@ -26,6 +29,7 @@ func GetS3Object(s3Client *s3.Client, bucketName string, key string) (*s3.GetObj
 		Key:    aws.String(key),
 	})
 	if err != nil {
+		fmt.Println("GetS3Object エラー❗️: ", err)
 		return nil, err
 	}
 	return output, nil
@@ -44,6 +48,24 @@ func CheckExistsS3Key(s3Client *s3.Client, bucketName string, key string) (bool,
 	}
 
 	return len(output.Contents) > 0, nil
+}
+
+func CheckFileExists(s3Client *s3.Client, bucketName string, key string)(bool, error){
+	_, err := s3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: aws.String(BucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var notFound *s3types.NotFound
+		ok := errors.As(err, &notFound)
+		if ok {
+			return false, nil
+		}
+		// その他のエラーが発生した場合はエラーを返す
+		return false, err
+	}
+	// オブジェクトが存在する場合は true を返す
+	return true, nil
 }
 
 func ConvertTextValue2IntValue(text string) (int, error) {
