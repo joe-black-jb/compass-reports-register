@@ -14,3 +14,6 @@ local:
 
 deploy:
 	sh ./scripts/deploy.sh
+
+single:
+	ENV=local go run ./sub/registerSingleReport.go
