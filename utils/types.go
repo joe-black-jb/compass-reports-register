@@ -21,6 +21,7 @@ type Company struct {
 	UpdatedAt  time.Time `json:"updatedAt" dynamodbav:"updatedAt"`
 	Name       string    `json:"name" dynamodbav:"name"`
 	EDINETCode string    `json:"edinetCode" dynamodbav:"edinetCode"`
+	SecurityCode string    `json:"securityCode" dynamodbav:"securityCode"`
 	BS         int       `json:"bs" dynamodbav:"bs"`
 	PL         int       `json:"pl" dynamodbav:"pl"`
 }

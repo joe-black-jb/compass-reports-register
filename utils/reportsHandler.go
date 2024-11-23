@@ -103,7 +103,7 @@ func init() {
 	BucketName = os.Getenv("BUCKET_NAME")
 	EDINETBucketName = os.Getenv("EDINET_BUCKET_NAME")
 	RegisterSingleReport = os.Getenv("REGISTER_SINGLE_REPORT")
-	Parallel = os.Getenv("Parallel")
+	Parallel = os.Getenv("PARALLEL")
 
 	// /tmp ディレクトリに invalid-summary.json と failed.json を登録する
 	CreateFailedFiles()
@@ -193,9 +193,9 @@ func GetReports() ([]Result, error) {
 
 	if Env == "local" {
 		// 集計開始日付
-		date = time.Date(2024, time.November, 11, 1, 0, 0, 0, loc)
+		date = time.Date(2022, time.July, 1, 1, 0, 0, 0, loc)
 		// 集計終了日付
-		endDate = time.Date(2024, time.November, 12, 1, 0, 0, 0, loc)
+		endDate = time.Date(2022, time.July, 31, 1, 0, 0, 0, loc)
 	} else if Env == "production" {
 		today := time.Now().In(loc)
 		// 集計開始日付
@@ -312,7 +312,8 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 			if output != nil {
 				readBody, err := io.ReadAll(output.Body)
 				if err != nil {
-					log.Fatal("io.ReadAll エラー: ", err)
+					fmt.Println("io.ReadAll エラー: ", err)
+          return
 				}
 				body = readBody
 				defer output.Body.Close()
@@ -330,7 +331,8 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 				}
 				HTMLReadBody, err := io.ReadAll(HTMLOutput.Body)
 				if err != nil {
-					log.Fatal("io.ReadAll エラー: ", err)
+					fmt.Println("io.ReadAll エラー: ", err)
+          return
 				}
 				body = HTMLReadBody
 				defer HTMLOutput.Body.Close()
@@ -472,6 +474,24 @@ func RegisterReport(dynamoClient *dynamodb.Client, EDINETCode string, docID stri
 	soloCFIFRSPattern := `(?s)<jpcrp_cor:StatementOfCashFlowsIFRSTextBlock contextRef="CurrentYearDuration">(.*?)</jpcrp_cor:StatementOfCashFlowsIFRSTextBlock>`
 	soloCFIFRSRe := regexp.MustCompile(soloCFIFRSPattern)
 	soloCFIFRSMattches := soloCFIFRSRe.FindString(string(body))
+
+  // 【証券コード】
+  securityCodePattern := `<jpdei_cor:SecurityCodeDEI[^>]*>(\d+)<\/jpdei_cor:SecurityCodeDEI>`
+  // securityCodePattern := `(?s)<jpdei_cor:SecurityCodeDEI contextRef="FilingDateInstant">(.*?)</jpdei_cor:SecurityCodeDEI>`
+  securityCodeRe := regexp.MustCompile(securityCodePattern)
+  // securityCodeMatches := securityCodeRe.FindString(string(body))
+  securityCodeMatches := securityCodeRe.FindStringSubmatch(string(body))
+  var securityCode string
+  if len(securityCodeMatches) > 1 {
+    // fmt.Printf("「%s」の証券コード: %s\n", companyName, securityCodeMatches[1])
+    securityCode = securityCodeMatches[1]
+  }
+
+  // 証券コード登録
+  err = UpdateSecCode(dynamoClient, EDINETCode, securityCode)
+  if err != nil {
+    fmt.Println("UpdateSecCode error: ", err)
+  }
 
 	// 貸借対照表HTMLをローカルに作成
 	doc, err := CreateHTML(docID, dateKey, "BS", consolidatedBSMatches, consolidatedBSIFRSMatches, soloBSMatches, consolidatedPLMatches, consolidatedPLIFRSMatches, soloPLMatches, BSFileNamePattern, PLFileNamePattern)
